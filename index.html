@@ -36,6 +36,9 @@ svg text{fill:var(--mute);font-size:11px}
 .meter i{display:block;height:100%}
 input[type=number]{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px;width:90px}
 #summary{white-space:pre-wrap;font:12px/1.4 ui-monospace,monospace;margin:8px 0 0}
+.logGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.logGrid label{font-size:13px;display:flex;flex-direction:column;gap:2px}
+.logGrid input{width:100%}
 :focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 </style></head><body><div class="wrap">
 <h1>Canary</h1>
@@ -66,6 +69,10 @@ input[type=number]{font:inherit;color:var(--ink);background:var(--panel);border:
 
   <div>
     <div class="card" id="status"></div>
+    <div class="card"><h2>Log today’s readings</h2>
+      <p class="mute">Type the day’s measurements and Canary re-checks your baseline and drift right away. Leave a box as it is to keep its value. The reaction check fills in reaction time and lapses.</p>
+      <div class="logGrid" id="logFields"></div>
+      <p><button id="logSave">Save to this day</button></p><p id="logMsg" class="mute"></p></div>
     <div class="card" id="radiation"></div>
     <div class="card"><h2>Flight surgeon summary</h2>
       <p class="mute">One-page text summary to send on the next uplink.</p>
@@ -264,9 +271,30 @@ function drawStatus(){
 }
 
 function render(){
-  $('dayLabel').textContent = day; $('day').value = day;
+  $('dayLabel').textContent = day; $('day').value = day; fillLog();
   drawBody(); drawDetail(); drawStatus(); drawRadiation();
 }
+
+// ---------- LOG TODAY'S READINGS ----------
+let filledDay = 0;   // which day the boxes currently show
+$('logFields').innerHTML = Object.keys(INDICATORS).map(k =>
+  `<label>${INDICATORS[k].name}${INDICATORS[k].unit ? ' (' + INDICATORS[k].unit + ')' : ''}<input id="log-${k}" type="number" step="any" min="0"></label>`).join('');
+
+function fillLog(){            // show the selected day's values in the boxes
+  if (filledDay === day) return;
+  filledDay = day;
+  for (const k in INDICATORS) $('log-' + k).value = days[day-1][k].toFixed(INDICATORS[k].digits);
+}
+
+$('logSave').onclick = () => {
+  for (const k in INDICATORS){
+    const v = parseFloat($('log-' + k).value);
+    if (!isNaN(v) && v >= 0) days[day-1][k] = k === 'lapses' ? Math.round(v) : v;
+  }
+  for (const k in INDICATORS) analysis[k] = analyse(k);   // re-run the drift engine
+  filledDay = 0; render();
+  $('logMsg').textContent = `Saved to day ${day}. Drift check updated.` + (day <= BASELINE_DAYS ? ' Days 1–7 set your baseline, so this changes your normal.' : '');
+};
 
 // ---------- RADIATION TRACKER ----------
 const DOSE_BUDGET = 100;   // illustrative mission dose budget in mSv, not an official limit
@@ -318,7 +346,7 @@ document.querySelectorAll('#body g').forEach(g => {
 });
 $('day').oninput = e => { day = +e.target.value; render(); };
 $('env').onchange = render;
-$('newMission').onclick = () => { seed = Math.floor(Math.random() * 99999); simulateMission(); extraDose = 0; day = 1; render(); };
+$('newMission').onclick = () => { seed = Math.floor(Math.random() * 99999); simulateMission(); extraDose = 0; filledDay = 0; day = 1; render(); };
 $('play').onclick = () => {
   if (timer){ clearInterval(timer); timer = null; $('play').textContent = 'Play mission'; return; }
   if (day >= 30) day = 1;
@@ -345,6 +373,7 @@ box.onpointerdown = () => {
   if (times.length < 5){ nextTrial(); return; }
   running = false; box.style.background = ''; box.textContent = 'Start again';
   const mine = Math.round(median(times)), base = Math.round(analysis.rt.center);
+  $('log-rt').value = mine; $('log-lapses').value = times.filter(t => t > 355).length;   // send results to the log
   $('pvtResult').textContent = `Median ${mine} ms vs your baseline ${base} ms. ` +
     (mine - base > 2 * analysis.rt.spread ? 'Slower than usual. Check sleep and cabin CO₂.' : 'In your usual range.');
 };
