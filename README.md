@@ -23,6 +23,9 @@ Escalation by environment: station, lunar base, or Mars transit
 Radiation tracker: running dose total against an illustrative budget, with a solar-event spike warning and manual dosimeter logging
 Flight surgeon summary: one-click text summary of status, drift, safety limits, and radiation
 Reaction check: five-tap test compared to baseline
+Log today's readings: type in sleep, reaction time, heart rate, blood pressure, glucose, temperature, and mood, and the drift check and body status update immediately
+Radiation tracker: running dose total against an illustrative budget, with a solar-event spike warning and manual dosimeter logging
+Flight surgeon summary: one-click text summary of status, drift, safety limits, and radiation
 Runs offline in the browser, no server
 Run it
 
@@ -33,8 +36,8 @@ Data is simulated, with a planted drift
 Thresholds are illustrative, not clinical
 Decision support, not diagnosis
 Radiation budget is illustrative, and false-alarm rate is not yet measured on large drift-free runs
-Next steps
 
+Next steps
 Validate on public sleep and reaction-time datasets, add Stroop and n-back tasks, and check thresholds against NASA references.
 
 Sources
