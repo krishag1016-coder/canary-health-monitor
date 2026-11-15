@@ -122,10 +122,10 @@ function simulateMission(){
       rt: 265 + 45*drift + noise()*12,
       lapses: Math.max(0, Math.round(0.6 + 3.5*drift + noise()*0.7)),
       mood: 7.5 - 2.2*drift + noise()*0.5,
-      hr: 62 + 1.5*drift + noise()*2.5,
-      sys: 118 + 2*drift + noise()*4,
-      glucose: 92 + 2*drift + noise()*5,
-      temp: 36.7 + noise()*0.12
+      hr: 62 + 8*drift + noise()*2.5,
+      sys: 118 + 12*drift + noise()*4,
+      glucose: 92 + 15*drift + noise()*5,
+      temp: 36.7 + 0.5*drift + noise()*0.12
     });
   }
   analysis = {};
