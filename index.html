@@ -32,6 +32,10 @@ tr.row{cursor:pointer}
 .next{border-left:4px solid var(--acc);padding-left:10px;margin-top:10px}
 #pvt{height:90px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;background:var(--base);user-select:none}
 svg text{fill:var(--mute);font-size:11px}
+.meter{height:12px;border-radius:6px;background:var(--line);overflow:hidden;margin:8px 0}
+.meter i{display:block;height:100%}
+input[type=number]{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px;width:90px}
+#summary{white-space:pre-wrap;font:12px/1.4 ui-monospace,monospace;margin:8px 0 0}
 :focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 </style></head><body><div class="wrap">
 <h1>Canary</h1>
@@ -62,6 +66,11 @@ svg text{fill:var(--mute);font-size:11px}
 
   <div>
     <div class="card" id="status"></div>
+    <div class="card" id="radiation"></div>
+    <div class="card"><h2>Flight surgeon summary</h2>
+      <p class="mute">One-page text summary to send on the next uplink.</p>
+      <button id="makeSummary">Create summary</button> <button id="copySummary">Copy</button>
+      <pre id="summary"></pre></div>
     <div class="card"><h2>Reaction check</h2>
       <p class="mute">Five taps. Tap as soon as the box turns green.</p>
       <div id="pvt" role="button" tabindex="0">Start</div><p id="pvtResult" class="mute"></p></div>
@@ -125,7 +134,8 @@ function simulateMission(){
       hr: 62 + 8*drift + noise()*2.5,
       sys: 118 + 12*drift + noise()*4,
       glucose: 92 + 15*drift + noise()*5,
-      temp: 36.7 + 0.5*drift + noise()*0.12
+      temp: 36.7 + 0.5*drift + noise()*0.12,
+      dose: 1.8 + noise()*0.15 + (i === 17 ? 12 : 0)   // daily radiation in mSv, with a solar particle event on day 18
     });
   }
   analysis = {};
@@ -255,8 +265,51 @@ function drawStatus(){
 
 function render(){
   $('dayLabel').textContent = day; $('day').value = day;
-  drawBody(); drawDetail(); drawStatus();
+  drawBody(); drawDetail(); drawStatus(); drawRadiation();
 }
+
+// ---------- RADIATION TRACKER ----------
+const DOSE_BUDGET = 100;   // illustrative mission dose budget in mSv, not an official limit
+let extraDose = 0;         // dosimeter readings the astronaut logs by hand
+
+function totalDose(d){ let t = extraDose; for (let i = 0; i < d; i++) t += days[i].dose; return t; }
+function doseStatus(t){ const f = t / DOSE_BUDGET; return f > 0.85 ? 'alert' : f > 0.6 ? 'watch' : 'ok'; }
+
+function drawRadiation(){
+  const t = totalDose(day), st = doseStatus(t), today = days[day-1].dose;
+  const names = {ok:'Within budget', watch:'Approaching budget', alert:'Near budget'};
+  $('radiation').innerHTML = `<h2>Radiation <span class="chip ${st}">${names[st]}</span></h2>
+    <p><b>${t.toFixed(1)} mSv</b> of ${DOSE_BUDGET} mSv illustrative mission budget. Today: ${today.toFixed(1)} mSv.</p>
+    <div class="meter"><i style="width:${Math.min(100, t / DOSE_BUDGET * 100)}%;background:var(--${st})"></i></div>
+    ${today > 5 ? '<p><span class="chip alert">Dose spike</span> Possible solar particle event. Move to the shielded area and report to the flight surgeon.</p>' : ''}
+    <p class="mute">Radiation effects do not show in daily vitals, so Canary tracks dose directly. Log a dosimeter reading:</p>
+    <input id="doseIn" type="number" min="0" step="0.1" aria-label="Dosimeter reading in mSv"> <button id="doseBtn">Add mSv</button>`;
+  $('doseBtn').onclick = () => { const v = parseFloat($('doseIn').value); if (v > 0){ extraDose += v; drawRadiation(); } };
+}
+
+// ---------- FLIGHT SURGEON SUMMARY ----------
+function buildSummary(){
+  const env = {station:'Space station', moon:'Lunar base', mars:'Mars transit'}[$('env').value];
+  const lines = [`CANARY HEALTH SUMMARY: mission day ${day}/30 (${env})`, 'Simulated data. Decision support only.', ''];
+  for (const r in REGIONS) lines.push(`${REGIONS[r].name}: ${LABELS[regionStatus(r, day)]}`);
+  lines.push('', 'Indicators (today vs personal baseline):');
+  for (const k in INDICATORS){
+    const a = analysis[k];
+    lines.push(`- ${INDICATORS[k].name}: ${show(k, a.values[day-1])} vs ${show(k, a.center)}${a.flagged[day-1] ? '  [DRIFT]' : ''}`);
+  }
+  const alerts = Object.values(safetyAlerts(days[day-1]));
+  lines.push('', `Drift duration: ${driftDays(day)} day(s)`, `Safety limits: ${alerts.length ? alerts.join('; ') : 'none crossed'}`);
+  lines.push(`Radiation: ${totalDose(day).toFixed(1)} mSv of ${DOSE_BUDGET} mSv illustrative budget`);
+  const flagged = Object.keys(REGIONS).filter(r => ['watch','alert'].includes(regionStatus(r, day)));
+  lines.push('', 'Suggested actions: ' + (flagged.length ? flagged.map(r => REGIONS[r].action).join(' ') : 'continue routine monitoring.'));
+  return lines.join('\n');
+}
+$('makeSummary').onclick = () => { $('summary').textContent = buildSummary(); };
+$('copySummary').onclick = () => {
+  if (!$('summary').textContent) $('summary').textContent = buildSummary();
+  if (navigator.clipboard) navigator.clipboard.writeText($('summary').textContent);
+  $('copySummary').textContent = 'Copied'; setTimeout(() => $('copySummary').textContent = 'Copy', 1500);
+};
 
 // ---------- 5. CONTROLS ----------
 document.querySelectorAll('#body g').forEach(g => {
@@ -265,7 +318,7 @@ document.querySelectorAll('#body g').forEach(g => {
 });
 $('day').oninput = e => { day = +e.target.value; render(); };
 $('env').onchange = render;
-$('newMission').onclick = () => { seed = Math.floor(Math.random() * 99999); simulateMission(); day = 1; render(); };
+$('newMission').onclick = () => { seed = Math.floor(Math.random() * 99999); simulateMission(); extraDose = 0; day = 1; render(); };
 $('play').onclick = () => {
   if (timer){ clearInterval(timer); timer = null; $('play').textContent = 'Play mission'; return; }
   if (day >= 30) day = 1;
