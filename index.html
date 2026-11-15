@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Canary: astronaut self-baseline health monitor</title>
+<style>
+:root{--bg:#eef2f6;--panel:#fff;--ink:#14212f;--mute:#5a6b7d;--line:#d3dce5;--ok:#1f9d6b;--watch:#c98a00;--alert:#d6443a;--base:#8fa0b2;--acc:#2b6cb0;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#101b28;--panel:#182739;--ink:#e6edf4;--mute:#93a5b8;--line:#2a3d52;--ok:#4fd1a0;--watch:#f2c14e;--alert:#ff7466;--base:#5d7186;--acc:#7cb7ff}}
+:root[data-theme="dark"]{--bg:#101b28;--panel:#182739;--ink:#e6edf4;--mute:#93a5b8;--line:#2a3d52;--ok:#4fd1a0;--watch:#f2c14e;--alert:#ff7466;--base:#5d7186;--acc:#7cb7ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}
+.wrap{max-width:1150px;margin:auto;padding:16px 20px}
+h1{margin:0;font-size:30px}
+.mute{color:var(--mute);font-size:13px}
+.bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:12px 0}
+.bar input{flex:1 1 220px}
+button,select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer}
+.grid{display:grid;grid-template-columns:220px 1fr 320px;gap:16px}
+@media(max-width:960px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+h2{margin:0 0 6px;font-size:18px}
+.chip{border-radius:99px;padding:1px 10px;font-size:13px;font-weight:600;color:#fff}
+.ok{background:var(--ok)}.watch{background:var(--watch)}.alert{background:var(--alert)}.base{background:var(--base)}
+#body g{cursor:pointer}
+#body .shape{fill-opacity:.2;stroke-width:2}
+#body .selected{stroke:var(--ink);stroke-width:3}
+@keyframes pulse{50%{opacity:.4}}
+.pulse{animation:pulse 1.4s infinite}
+@media(prefers-reduced-motion:reduce){.pulse{animation:none}}
+table{width:100%;border-collapse:collapse}
+td,th{text-align:left;padding:5px 4px;border-bottom:1px solid var(--line);font-size:14px}
+tr.row{cursor:pointer}
+.next{border-left:4px solid var(--acc);padding-left:10px;margin-top:10px}
+#pvt{height:90px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;background:var(--base);user-select:none}
+svg text{fill:var(--mute);font-size:11px}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+</style></head><body><div class="wrap">
+<h1>Canary</h1>
+<p class="mute">On a Mars transit the astronaut is the first responder. Canary compares every reading to your own baseline, flags drift early, and tells you what to do next, even offline.</p>
+
+<div class="bar">
+  <label>Mission day <b id="dayLabel">1</b>/30</label>
+  <input id="day" type="range" min="1" max="30" value="1" aria-label="Mission day">
+  <button id="play">Play mission</button>
+  <label>Environment
+    <select id="env"><option value="station">Space station</option><option value="moon">Lunar base</option><option value="mars" selected>Mars transit</option></select></label>
+  <button id="newMission">New simulated mission</button>
+</div>
+
+<div class="grid">
+  <div class="card"><h2>Body</h2><p class="mute">Select a region.</p>
+    <svg id="body" viewBox="0 0 200 380" role="group" aria-label="Clickable body figure">
+      <g data-region="body" tabindex="0" role="button" aria-label="Whole body">
+        <circle class="shape" cx="100" cy="45" r="30"/><rect class="shape" x="62" y="85" width="76" height="140" rx="28"/>
+        <rect class="shape" x="30" y="90" width="26" height="130" rx="13"/><rect class="shape" x="144" y="90" width="26" height="130" rx="13"/>
+        <rect class="shape" x="68" y="215" width="30" height="150" rx="14"/><rect class="shape" x="102" y="215" width="30" height="150" rx="14"/></g>
+      <g data-region="brain" tabindex="0" role="button" aria-label="Brain and behavior"><ellipse class="organ" cx="100" cy="42" rx="20" ry="16"/></g>
+      <g data-region="heart" tabindex="0" role="button" aria-label="Heart"><path class="organ" d="M108 142C88 128 92 108 108 116C124 108 128 128 108 142Z"/></g>
+      <g data-region="gut" tabindex="0" role="button" aria-label="Metabolism"><ellipse class="organ" cx="100" cy="182" rx="24" ry="19"/></g>
+    </svg></div>
+
+  <div class="card" id="detail"></div>
+
+  <div>
+    <div class="card" id="status"></div>
+    <div class="card"><h2>Reaction check</h2>
+      <p class="mute">Five taps. Tap as soon as the box turns green.</p>
+      <div id="pvt" role="button" tabindex="0">Start</div><p id="pvtResult" class="mute"></p></div>
+  </div>
+</div>
+<p class="mute">Decision support, not diagnosis. Data is simulated and thresholds are illustrative, not clinical. Method: baseline = median and MAD of days 1–7, then two-sided CUSUM (k=0.5, h=4) per indicator, fused by body region.</p>
+</div>
+
+<script>
+// ---------- 1. SETTINGS ----------
+const BASELINE_DAYS = 7;   // first days used to learn "normal" for this astronaut
+const K = 0.5;             // CUSUM slack: ignore tiny wobbles
+const H = 4;               // CUSUM alarm threshold
+
+// minSpread stops a very quiet baseline from making every wobble look huge
+const INDICATORS = {
+  sleep:  {name:'Sleep',            unit:'h',     digits:1, region:'brain', minSpread:0.3,  how:'Wrist log or sleep diary'},
+  rt:     {name:'Reaction time',    unit:'ms',    digits:0, region:'brain', minSpread:8,    how:'Median of the reaction check'},
+  lapses: {name:'Attention lapses', unit:'',      digits:0, region:'brain', minSpread:0.8,  how:'Slow responses (over 355 ms) in the check'},
+  mood:   {name:'Mood',             unit:'/10',   digits:1, region:'brain', minSpread:0.4,  how:'Self-rating from 1 to 10'},
+  hr:     {name:'Resting heart rate',unit:'bpm',  digits:0, region:'heart', minSpread:2,    how:'Seated 5 min, pulse at the wrist'},
+  sys:    {name:'Systolic BP',      unit:'mmHg',  digits:0, region:'heart', minSpread:4,    how:'Seated 5 min, cuff on upper arm'},
+  glucose:{name:'Glucose',          unit:'mg/dL', digits:0, region:'gut',   minSpread:5,    how:'Fingerstick before a meal'},
+  temp:   {name:'Temperature',      unit:'°C',    digits:1, region:'body',  minSpread:0.12, how:'Oral thermometer, 15 min after a drink'}
+};
+
+const REGIONS = {
+  brain:{name:'Brain and behavior', info:'Attention, memory, mood and sleep.', hazards:'Isolation, distance from Earth, closed-cabin CO₂.', action:'Protect sleep, talk with a crewmate, check cabin CO₂, and do demanding tasks early.'},
+  heart:{name:'Heart and circulation', info:'Fluid shifts in microgravity change heart rate and pressure.', hazards:'Altered gravity, radiation (long term).', action:'Do the exercise countermeasure, hydrate, and recheck after rest.'},
+  gut:  {name:'Metabolism', info:'Energy balance and glucose control.', hazards:'Nutrition limits, stress, altered gravity.', action:'Review meal timing and intake, then recheck fasting glucose tomorrow.'},
+  body: {name:'Whole body', info:'Temperature regulation and immune response.', hazards:'Radiation, closed environment, immune changes.', action:'Rest, fluids, and a second reading in one hour. If a fever persists, consult.'}
+};
+
+// Illustrative hard limits. These always win over the personal baseline.
+function safetyAlerts(d){
+  const out = {};
+  if (d.temp > 38) out.body = 'Fever above 38 °C';
+  if (d.sys > 160 || d.sys < 85 || d.hr > 120 || d.hr < 40) out.heart = 'Heart rate or blood pressure out of safe range';
+  if (d.glucose < 60 || d.glucose > 250) out.gut = 'Glucose out of safe range';
+  return out;
+}
+
+// ---------- 2. SIMULATED MISSION ----------
+let seed = 7, days = [], analysis = {};
+
+function makeRandom(s){            // small seeded random generator
+  return () => { s = (s * 1664525 + 1013904223) % 4294967296; return s / 4294967296; };
+}
+
+function simulateMission(){
+  const random = makeRandom(seed);
+  const noise = () => (random()+random()+random()+random()+random()+random() - 3) / 0.7071; // about normal(0,1)
+  days = [];
+  for (let i = 0; i < 30; i++){
+    const drift = i >= 7 ? Math.min(1, (i - 6) / 10) : 0;  // slow decline starts on day 8
+    days.push({
+      sleep: 7.3 - 2.0*drift + noise()*0.35,
+      rt: 265 + 45*drift + noise()*12,
+      lapses: Math.max(0, Math.round(0.6 + 3.5*drift + noise()*0.7)),
+      mood: 7.5 - 2.2*drift + noise()*0.5,
+      hr: 62 + 1.5*drift + noise()*2.5,
+      sys: 118 + 2*drift + noise()*4,
+      glucose: 92 + 2*drift + noise()*5,
+      temp: 36.7 + noise()*0.12
+    });
+  }
+  analysis = {};
+  for (const key in INDICATORS) analysis[key] = analyse(key);
+}
+
+// ---------- 3. DRIFT ENGINE ----------
+function median(list){
+  const s = [...list].sort((a,b) => a-b), m = Math.floor(s.length/2);
+  return s.length % 2 ? s[m] : (s[m-1] + s[m]) / 2;
+}
+
+function analyse(key){
+  const values = days.map(d => d[key]);
+  const base = values.slice(0, BASELINE_DAYS);
+  const center = median(base);
+  const mad = median(base.map(v => Math.abs(v - center)));
+  const spread = Math.max(1.4826 * mad, INDICATORS[key].minSpread); // robust "standard deviation"
+
+  let up = 0, down = 0;                       // CUSUM sums for upward and downward drift
+  const flagged = values.map((v, i) => {
+    const z = (v - center) / spread;          // distance from personal normal
+    up = Math.max(0, up + z - K);
+    down = Math.max(0, down - z - K);
+    return i >= BASELINE_DAYS && (up > H || down > H);
+  });
+  return {values, center, spread, flagged};
+}
+
+// Region status: "base" while learning, "alert" for safety limits,
+// "watch" if enough indicators drift together, otherwise "ok".
+function regionStatus(region, day){
+  if (day <= BASELINE_DAYS) return 'base';
+  if (safetyAlerts(days[day-1])[region]) return 'alert';
+  const keys = Object.keys(INDICATORS).filter(k => INDICATORS[k].region === region);
+  const drifting = keys.filter(k => analysis[k].flagged[day-1]).length;
+  return drifting >= Math.min(2, keys.length) ? 'watch' : 'ok';
+}
+
+function driftDays(day){                      // how many days in a row something has drifted
+  let n = 0;
+  for (let i = day - 1; i >= BASELINE_DAYS; i--){
+    if (Object.keys(INDICATORS).some(k => analysis[k].flagged[i])) n++; else break;
+  }
+  return n;
+}
+
+// ---------- 4. SCREEN ----------
+let day = 1, selected = 'brain', chartKey = 'rt', timer = null;
+const $ = id => document.getElementById(id);
+const show = (key, v) => v.toFixed(INDICATORS[key].digits) + (INDICATORS[key].unit ? ' ' + INDICATORS[key].unit : '');
+const LABELS = {ok:'Within your baseline', watch:'Drifting from your baseline', alert:'Safety limit crossed', base:'Building baseline (days 1–7)'};
+
+function drawBody(){
+  for (const region in REGIONS){
+    const status = regionStatus(region, day);
+    document.querySelectorAll(`[data-region="${region}"] .shape, [data-region="${region}"] .organ`).forEach(el => {
+      el.style.fill = el.style.stroke = `var(--${status})`;
+      if (el.classList.contains('organ')) el.style.fillOpacity = 0.85;
+      el.classList.toggle('selected', region === selected);
+      el.classList.toggle('pulse', status === 'watch' || status === 'alert');
+    });
+  }
+}
+
+function drawChart(key){
+  const a = analysis[key], w = 300, h = 110;
+  const low = Math.min(...a.values, a.center - 2.5*a.spread), high = Math.max(...a.values, a.center + 2.5*a.spread);
+  const x = i => 10 + i * (w - 20) / 29;
+  const y = v => h - 8 - (v - low) / (high - low) * (h - 20);
+  const shown = a.values.slice(0, day);
+  const dots = shown.map((v, i) => `<circle cx="${x(i)}" cy="${y(v)}" r="${a.flagged[i] ? 4 : 2}" fill="${a.flagged[i] ? 'var(--alert)' : 'var(--acc)'}"/>`).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" role="img" aria-label="Trend of ${INDICATORS[key].name}">
+    <rect x="10" y="${y(a.center + 2*a.spread)}" width="${w-20}" height="${y(a.center - 2*a.spread) - y(a.center + 2*a.spread)}" fill="var(--ok)" opacity=".18"/>
+    <line x1="${x(6)}" x2="${x(6)}" y1="4" y2="${h-8}" stroke="var(--line)"/><text x="${x(6)+3}" y="14">baseline ends</text>
+    <polyline fill="none" stroke="var(--acc)" stroke-width="2" points="${shown.map((v,i) => x(i)+','+y(v)).join(' ')}"/>${dots}</svg>`;
+}
+
+function drawDetail(){
+  const region = REGIONS[selected], status = regionStatus(selected, day);
+  const keys = Object.keys(INDICATORS).filter(k => INDICATORS[k].region === selected);
+  if (!keys.includes(chartKey)) chartKey = keys[0];
+  const rows = keys.map(k => `<tr class="row" data-key="${k}" tabindex="0" ${k === chartKey ? 'style="font-weight:700"' : ''}>
+    <td>${INDICATORS[k].name}</td><td>${show(k, analysis[k].values[day-1])}</td><td>${show(k, analysis[k].center)}</td></tr>`).join('');
+  $('detail').innerHTML = `<h2>${region.name} <span class="chip ${status}">${LABELS[status]}</span></h2>
+    <p>${region.info}</p><p class="mute">Hazards: ${region.hazards}</p>
+    <table><tr><th>Indicator</th><th>Today</th><th>Your baseline</th></tr>${rows}</table>
+    ${drawChart(chartKey)}
+    <p class="mute">How to measure: ${INDICATORS[chartKey].how}. Green band is your normal range. Red dots mark sustained drift.</p>
+    <div class="next"><b>What to do</b><br>${region.action}</div>`;
+  document.querySelectorAll('tr.row').forEach(r => {
+    r.onclick = () => { chartKey = r.dataset.key; render(); };
+    r.onkeydown = e => { if (e.key === 'Enter') r.click(); };
+  });
+}
+
+function drawStatus(){
+  const env = $('env').value, notes = {
+    station:'Space station: ground contact in minutes.', moon:'Lunar base: about 3 s signal delay.', mars:'Mars transit: 20+ min each way.'};
+  let html = `<h2>Status</h2><p class="mute">${notes[env]}</p>`;
+  const alerts = Object.values(safetyAlerts(days[day-1]));
+  const drifting = Object.keys(REGIONS).some(r => regionStatus(r, day) === 'watch');
+  const n = driftDays(day);
+
+  if (day <= BASELINE_DAYS){
+    html += '<p>Learning your baseline. Every reading is compared with your own median, not a population average.</p>';
+  } else if (alerts.length){
+    html += `<p><span class="chip alert">Safety limit</span> ${alerts.join('. ')}.</p><div class="next"><b>Escalate now</b><br>${
+      env === 'mars' ? 'The crew medical officer leads and a summary goes to the flight surgeon now. Expect a reply in 40+ min.' : 'Request a flight surgeon consult now.'}</div>`;
+  } else if (!drifting){
+    html += '<p><span class="chip ok">All clear</span> No sustained drift from your baseline.</p>';
+  } else {
+    const causes = Object.keys(INDICATORS).filter(k => analysis[k].flagged[day-1]).map(k => {
+      const a = analysis[k], recent = median(a.values.slice(Math.max(0, day-3), day)), diff = recent - a.center;
+      return `<li>${INDICATORS[k].name} ${diff > 0 ? 'up' : 'down'} ${Math.abs(diff).toFixed(INDICATORS[k].digits)} ${INDICATORS[k].unit} vs baseline</li>`;
+    }).join('');
+    const tier = env === 'mars' ? 'Self-manage and crewmate check' : n >= 3 ? 'Request flight surgeon consult' : 'Self-manage, tell the surgeon at the next conference';
+    const why = env === 'mars' ? 'Ground is 20+ min away, so act first: sleep, CO₂ check, exercise. A summary is queued for the next uplink.'
+      : env === 'moon' ? 'The surgeon is reachable in seconds. Share the trend.' : 'Ground is minutes away. Share the trend at the next daily conference.';
+    html += `<p><span class="chip watch">Drift detected</span> For ${n} day${n > 1 ? 's' : ''}. Confidence: <b>${n >= 3 ? 'high' : 'moderate'}</b>.</p>
+      <p class="mute">Likely contributors</p><ul>${causes}</ul><div class="next"><b>${tier}</b><br>${why}</div>`;
+  }
+  const first = Object.keys(INDICATORS).map(k => analysis[k].flagged.indexOf(true)).filter(i => i >= 0);
+  if (day > BASELINE_DAYS && first.length) html += `<p class="mute">First drift flag this mission: day ${Math.min(...first) + 1}. Vitals stay inside population ranges.</p>`;
+  $('status').innerHTML = html;
+}
+
+function render(){
+  $('dayLabel').textContent = day; $('day').value = day;
+  drawBody(); drawDetail(); drawStatus();
+}
+
+// ---------- 5. CONTROLS ----------
+document.querySelectorAll('#body g').forEach(g => {
+  g.onclick = () => { selected = g.dataset.region; render(); };
+  g.onkeydown = e => { if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); g.onclick(); } };
+});
+$('day').oninput = e => { day = +e.target.value; render(); };
+$('env').onchange = render;
+$('newMission').onclick = () => { seed = Math.floor(Math.random() * 99999); simulateMission(); day = 1; render(); };
+$('play').onclick = () => {
+  if (timer){ clearInterval(timer); timer = null; $('play').textContent = 'Play mission'; return; }
+  if (day >= 30) day = 1;
+  $('play').textContent = 'Pause';
+  timer = setInterval(() => {
+    if (day >= 30){ clearInterval(timer); timer = null; $('play').textContent = 'Play mission'; return; }
+    day++; render();
+  }, 450);
+};
+
+// ---------- 6. REACTION CHECK (5 taps) ----------
+const box = $('pvt');
+let times = [], waiting = null, goTime = 0, running = false;
+
+function nextTrial(){
+  box.style.background = 'var(--alert)'; box.textContent = 'Wait…'; goTime = 0;
+  waiting = setTimeout(() => { box.style.background = 'var(--ok)'; box.textContent = 'Tap now'; goTime = performance.now(); }, 1200 + Math.random() * 2800);
+}
+
+box.onpointerdown = () => {
+  if (!running){ running = true; times = []; nextTrial(); return; }
+  if (!goTime){ clearTimeout(waiting); box.textContent = 'Too early. Wait for green…'; nextTrial(); return; }
+  times.push(performance.now() - goTime);
+  if (times.length < 5){ nextTrial(); return; }
+  running = false; box.style.background = ''; box.textContent = 'Start again';
+  const mine = Math.round(median(times)), base = Math.round(analysis.rt.center);
+  $('pvtResult').textContent = `Median ${mine} ms vs your baseline ${base} ms. ` +
+    (mine - base > 2 * analysis.rt.spread ? 'Slower than usual. Check sleep and cabin CO₂.' : 'In your usual range.');
+};
+box.onkeydown = e => { if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); box.onpointerdown(); } };
+
+simulateMission();
+render();
+</script></body></html>
